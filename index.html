@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Tank Battle - Tower Final</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
+        #ui-layer { position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        .hud { position: absolute; bottom: 20px; color: lime; background: rgba(0,0,0,0.7); padding: 10px; border: 2px solid orange; font-size: 18px; }
+        #menu { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.95); display: flex; flex-direction: column; 
+            justify-content: center; align-items: center; color: white; z-index: 100; pointer-events: all;
+        }
+        .option-group { margin: 15px; text-align: center; border: 1px solid #444; padding: 10px; }
+        button { 
+            padding: 10px 15px; font-size: 16px; cursor: pointer; background: orange; 
+            border: none; font-weight: bold; margin: 5px; transition: 0.2s;
+        }
+        button:hover { background: #ffcc00; transform: scale(1.05); }
+        button.selected { outline: 3px solid white; background: #cc7a00; }
+        #timer { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); font-size: 30px; color: red; display: none; }
+        .score-box { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="menu">
+    <h1>TANK ARENA 3D</h1>
+    <div class="option-group">
+        <h3>WYBIERZ MAPĘ:</h3>
+        <button onclick="setMap(1, this)" class="selected">KLASYCZNA</button>
+        <button onclick="setMap(2, this)">WIEŻA</button>
+        <button onclick="setMap(3, this)">LAWA PARKOUR</button>
+    </div>
+    <div class="option-group">
+        <h3>TRYB GRY:</h3>
+        <button onclick="setMode('classic', this)" class="selected">KLASYCZNY (10HP)</button>
+        <button onclick="setMode('oneshot', this)">ONE SHOT (1 MINUTA)</button>
+    </div>
+    <button id="start-btn" onclick="startGame()" style="background: lime; color: black; margin-top: 20px; font-size: 24px;">START!</button>
+</div>
+
+<div id="ui-layer">
+    <div id="timer">60s</div>
+    <div class="hud" style="left: 20px;">G1 HP: <span id="hp1">10</span> <span class="score-box">| KILLS: <span id="k1">0</span></span></div>
+    <div class="hud" style="right: 20px;">G2 HP: <span id="hp2">10</span> <span class="score-box">| KILLS: <span id="k2">0</span></span></div>
+</div>
+
+<script type="module">
+    import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
+
+    const scene = new THREE.Scene();
+    const renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const amb = new THREE.AmbientLight(0xffffff, 0.9); scene.add(amb);
+    const sun = new THREE.DirectionalLight(0xffffff, 0.4); sun.position.set(10, 50, 10); scene.add(sun);
+
+    let walls = [], currentMap = 1, currentMode = 'classic', isPlaying = false;
+    let gameTimer = 60, timerInterval;
+    let score = {p1: 0, p2: 0};
+
+    const floorGeo = new THREE.PlaneGeometry(120, 120);
+    const floor = new THREE.Mesh(floorGeo, new THREE.MeshLambertMaterial({color: 0x222222}));
+    floor.rotation.x = -Math.PI/2;
+    scene.add(floor);
+
+    function clearMap() {
+        walls.forEach(w => scene.remove(w.mesh));
+        walls = [];
+    }
+
+    function addWall(x, z, w, h, d, color = 0xffa500) {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({color}));
+        mesh.position.set(x, h/2, z);
+        scene.add(mesh);
+        walls.push({ mesh, box: new THREE.Box3().setFromObject(mesh), height: h, x, z });
+    }
+
+    window.setMap = (n, btn) => {
+        currentMap = n;
+        Array.from(btn.parentElement.children).forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+    };
+
+    window.setMode = (m, btn) => {
+        currentMode = m;
+        Array.from(btn.parentElement.children).forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+    };
+
+    function buildMap() {
+        clearMap();
+        floor.material.color.set(currentMap === 3 ? 0xff2200 : 0x222222);
+        
+        if(currentMap === 1) {
+            for(let i=0; i<15; i++) addWall(Math.random()*80-40, Math.random()*80-40, 6, 4, 6, 0xffa500);
+        } else if(currentMap === 2) {
+            // WIEŻA NA ŚRODKU
+            addWall(0, 0, 8, 8, 8, 0xffff00);
+            // SCHODY SKIEROWANE DO WIEŻY
+            for(let i=1; i<=6; i++) {
+                let stepH = i * 1.3;
+                let dist = 18 - (i * 2); // Schody zbliżają się do środka
+                addWall(dist, 0, 3, stepH, 4, 0xffff00); // Od Wschodu
+                addWall(-dist, 0, 3, stepH, 4, 0xffff00); // Od Zachodu
+                addWall(0, dist, 4, stepH, 3, 0xffff00); // Od Północy
+                addWall(0, -dist, 4, stepH, 3, 0xffff00); // Od Południa
+            }
+            for(let i=0; i<10; i++) addWall(Math.random()*80-40, Math.random()*80-40, 4, 1.5 + Math.random()*3, 4, 0xffff00);
+        } else if(currentMap === 3) {
+            for(let x=-45; x<=45; x+=12) {
+                for(let z=-45; z<=45; z+=12) {
+                    addWall(x + (Math.random()-0.5)*4, z + (Math.random()-0.5)*4, 5, 3.5, 5, 0x444444);
+                }
+            }
+        }
+        addWall(0, 60, 120, 10, 2, 0x555555); addWall(0, -60, 120, 10, 2, 0x555555);
+        addWall(60, 0, 2, 10, 120, 0x555555); addWall(-60, 0, 2, 10, 120, 0x555555);
+    }
+
+    class Tank {
+        constructor(color, id, controls) {
+            this.id = id;
+            this.controls = controls;
+            this.mesh = new THREE.Group();
+            this.body = new THREE.Mesh(new THREE.BoxGeometry(2, 1.2, 3), new THREE.MeshLambertMaterial({color, transparent:true}));
+            this.body.position.y = 0.6; this.mesh.add(this.body);
+            const t = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 1.2), new THREE.MeshLambertMaterial({color}));
+            t.position.y = 1.5; this.mesh.add(t);
+            const g = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 2), new THREE.MeshLambertMaterial({color:0x000000}));
+            g.rotation.x = Math.PI/2; g.position.set(0, 1.5, 1.2); this.mesh.add(g);
+            this.bullets = [];
+            this.hp = 10; this.velY = 0; this.invul = 0;
+            scene.add(this.mesh);
+        }
+
+        spawn() {
+            let randomWall = walls[Math.floor(Math.random() * (walls.length - 4))];
+            this.mesh.position.set(randomWall.x, randomWall.height + 2, randomWall.z);
+            this.hp = (currentMode === 'oneshot') ? 1 : 10;
+            this.velY = 0;
+            this.updateUI();
+        }
+
+        updateUI() {
+            document.getElementById('hp'+this.id).innerText = Math.max(0, this.hp);
+            if(currentMode === 'oneshot') {
+                document.getElementById('k'+this.id).innerText = score['p'+this.id];
+            }
+        }
+
+        update(keys, enemy) {
+            if(!isPlaying) return;
+            const rot = 0.05, move = 0.18;
+            if(keys[this.controls.left]) this.mesh.rotation.y += rot;
+            if(keys[this.controls.right]) this.mesh.rotation.y -= rot;
+
+            const next = this.mesh.position.clone();
+            const dir = new THREE.Vector3(0,0,1).applyQuaternion(this.mesh.quaternion);
+            if(keys[this.controls.forward]) next.add(dir.clone().multiplyScalar(move));
+            if(keys[this.controls.backward]) next.sub(dir.clone().multiplyScalar(move));
+
+            let groundY = 0;
+            const pBox = new THREE.Box3().setFromCenterAndSize(next, new THREE.Vector3(2, 2, 3));
+            walls.forEach(w => {
+                if(pBox.intersectsBox(w.box) && this.mesh.position.y >= w.height - 0.3) groundY = Math.max(groundY, w.height);
+            });
+
+            let canMove = true;
+            const horBox = new THREE.Box3().setFromCenterAndSize(next, new THREE.Vector3(2, 0.8, 3));
+            for(let w of walls) {
+                if(horBox.intersectsBox(w.box) && next.y < w.height - 0.5) { canMove = false; break; }
+            }
+            if(canMove) { this.mesh.position.x = next.x; this.mesh.position.z = next.z; }
+
+            if(keys[this.controls.jump] && this.mesh.position.y <= groundY + 0.1) this.velY = 0.28;
+            this.mesh.position.y += this.velY;
+            if(this.mesh.position.y > groundY) this.velY -= 0.01;
+            else { this.mesh.position.y = groundY; this.velY = 0; }
+
+            // Mechanika Lawy
+            if(currentMap === 3 && this.mesh.position.y <= 0.01) {
+                this.velY = 0.5; 
+                // NATYCHMIASTOWY PUNKT DLA WROGA W ONESHOT
+                if(currentMode === 'oneshot') {
+                    score['p' + (this.id === 1 ? 2 : 1)]++;
+                    enemy.updateUI();
+                }
+                this.takeDamage(true, (this.id === 1 ? 2 : 1));
+            }
+
+            if(this.invul > 0) { this.invul--; this.body.material.opacity = (this.invul % 10 < 5) ? 0.2 : 1; }
+            else this.body.material.opacity = 1;
+
+            if(keys[this.controls.shoot] && !this.wait) {
+                this.shoot(); this.wait = true; setTimeout(()=>this.wait=false, 500);
+            }
+
+            this.bullets.forEach((b, i) => {
+                b.position.add(b.userData.v);
+                const bB = new THREE.Box3().setFromCenterAndSize(b.position, new THREE.Vector3(0.5,0.5,0.5));
+                let hitWall = walls.some(w => w.box.intersectsBox(bB));
+                let hitEnemy = bB.intersectsBox(new THREE.Box3().setFromObject(enemy.mesh));
+
+                if(hitWall || hitEnemy || b.userData.l-- < 0) {
+                    if (hitEnemy) {
+                        if(currentMode === 'oneshot') { score['p' + this.id]++; this.updateUI(); }
+                        enemy.takeDamage(false, this.id); 
+                    }
+                    scene.remove(b); this.bullets.splice(i, 1);
+                }
+            });
+        }
+
+        takeDamage(force = false, killerId = null) {
+            if(this.invul > 0 && !force) return;
+            this.hp--; this.invul = 60; this.updateUI();
+            
+            if(this.hp <= 0) {
+                if(currentMode === 'oneshot') {
+                    this.spawn();
+                } else {
+                    endGame(killerId);
+                }
+            }
+        }
+
+        shoot() {
+            const b = new THREE.Mesh(new THREE.SphereGeometry(0.25), new THREE.MeshBasicMaterial({color:0xff0000}));
+            b.position.copy(this.mesh.position).y += 1.5;
+            b.userData = { v: new THREE.Vector3(0, 0, 1).applyQuaternion(this.mesh.quaternion).multiplyScalar(1.0), l: 120 };
+            this.bullets.push(b); scene.add(b);
+        }
+    }
+
+    const p1 = new Tank(0x00ff00, 1, {forward:'w', backward:'s', left:'a', right:'d', jump:'v', shoot:'b'});
+    const p2 = new Tank(0x00aaff, 2, {forward:'arrowup', backward:'arrowdown', left:'arrowleft', right:'arrowright', jump:'o', shoot:'p'});
+    const cam1 = new THREE.PerspectiveCamera(75, (window.innerWidth/2)/window.innerHeight, 0.1, 1000);
+    const cam2 = new THREE.PerspectiveCamera(75, (window.innerWidth/2)/window.innerHeight, 0.1, 1000);
+
+    window.startGame = () => {
+        buildMap();
+        score = {p1: 0, p2: 0};
+        p1.spawn(); p2.spawn();
+        document.getElementById('menu').style.display = 'none';
+        isPlaying = true;
+        
+        const sBoxes = document.querySelectorAll('.score-box');
+        if(currentMode === 'oneshot') {
+            sBoxes.forEach(b => b.style.display = 'inline');
+            gameTimer = 60;
+            document.getElementById('timer').style.display = 'block';
+            if(timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                gameTimer--;
+                document.getElementById('timer').innerText = gameTimer + "s";
+                if(gameTimer <= 0) endGame();
+            }, 1000);
+        } else {
+            sBoxes.forEach(b => b.style.display = 'none');
+            document.getElementById('timer').style.display = 'none';
+        }
+    };
+
+    function endGame(winnerId = null) {
+        isPlaying = false;
+        clearInterval(timerInterval);
+        document.getElementById('timer').style.display = 'none';
+        let msg = "KONIEC!";
+        if(currentMode === 'oneshot') {
+            if(score.p1 > score.p2) msg = "G1 WYGRYWA: " + score.p1;
+            else if(score.p2 > score.p1) msg = "G2 WYGRYWA: " + score.p2;
+            else msg = "REMIS! " + score.p1 + " : " + score.p2;
+        } else {
+            msg = winnerId ? "GRACZ " + winnerId + " WYGRYWA!" : "KONIEC GRY!";
+        }
+        document.querySelector('#menu h1').innerText = msg;
+        document.getElementById('menu').style.display = 'flex';
+    }
+
+    const keys = {};
+    window.onkeydown = (e) => keys[e.key.toLowerCase()] = true;
+    window.onkeyup = (e) => keys[e.key.toLowerCase()] = false;
+
+    function animate() {
+        requestAnimationFrame(animate);
+        p1.update(keys, p2); p2.update(keys, p1);
+        const updateCam = (cam, t) => {
+            cam.position.copy(new THREE.Vector3(0, 2, 0.5).applyQuaternion(t.mesh.quaternion).add(t.mesh.position));
+            cam.lookAt(new THREE.Vector3(0, 2, 10).applyQuaternion(t.mesh.quaternion).add(t.mesh.position));
+        };
+        updateCam(cam1, p1); updateCam(cam2, p2);
+        const w = window.innerWidth, h = window.innerHeight;
+        renderer.setScissorTest(true);
+        renderer.setScissor(0,0,w/2,h); renderer.setViewport(0,0,w/2,h); renderer.render(scene, cam1);
+        renderer.setScissor(w/2,0,w/2,h); renderer.setViewport(w/2,0,w/2,h); renderer.render(scene, cam2);
+    }
+    animate();
+</script>
+</body>
+</html>
